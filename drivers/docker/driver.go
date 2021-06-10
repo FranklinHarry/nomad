@@ -15,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/davecgh/go-spew/spew"
 	docker "github.com/fsouza/go-dockerclient"
 	"github.com/hashicorp/consul-template/signals"
 	hclog "github.com/hashicorp/go-hclog"
@@ -24,6 +25,7 @@ import (
 	"github.com/hashicorp/nomad/drivers/docker/docklog"
 	"github.com/hashicorp/nomad/drivers/shared/capabilities"
 	"github.com/hashicorp/nomad/drivers/shared/eventer"
+	"github.com/hashicorp/nomad/drivers/shared/hostnames"
 	"github.com/hashicorp/nomad/drivers/shared/resolvconf"
 	nstructs "github.com/hashicorp/nomad/nomad/structs"
 	"github.com/hashicorp/nomad/plugins/base"
@@ -246,6 +248,8 @@ func (d *Driver) RecoverTask(handle *drivers.TaskHandle) error {
 }
 
 func (d *Driver) StartTask(cfg *drivers.TaskConfig) (*drivers.TaskHandle, *drivers.DriverNetwork, error) {
+	spew.Dump(cfg)
+
 	if _, ok := d.tasks.Get(cfg.ID); ok {
 		return nil, nil, fmt.Errorf("task with ID %q already started", cfg.ID)
 	}
@@ -953,6 +957,32 @@ func (d *Driver) createContainerConfig(task *drivers.TaskConfig, driverConfig *T
 		}
 		hostConfig.Mounts = append(hostConfig.Mounts, *hm)
 	}
+
+	// DEBUG
+	// hostConfig.Mounts = append(hostConfig.Mounts, docker.HostMount{
+	// 	Target:   "/etc/hosts",
+	// 	Source:   "/etc/hosts",
+	// 	Type:     "bind",
+	// 	ReadOnly: true,
+	// })
+	if task.NetworkIsolation != nil {
+		etcHostMount, err := hostnames.GenerateEtcHostsMount(
+			task.TaskDir().Dir, task.NetworkIsolation)
+		if err != nil {
+			return c, fmt.Errorf("failed to build mount for /etc/hosts: %v", err)
+		}
+		hostConfig.Mounts = append(hostConfig.Mounts, docker.HostMount{
+			Target:   etcHostMount.TaskPath,
+			Source:   etcHostMount.HostPath,
+			Type:     "bind",
+			ReadOnly: etcHostMount.Readonly,
+			BindOptions: &docker.BindOptions{
+				Propagation: etcHostMount.PropagationMode,
+			},
+		})
+	}
+
+	// END DEBUG
 
 	// Setup DNS
 	// If task DNS options are configured Nomad will manage the resolv.conf file
